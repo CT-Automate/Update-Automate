@@ -1,70 +1,97 @@
 ﻿{
-  "data_root": "data",
-  "output_root": "collector/output",
-  "image_extensions": [
-    ".png",
-    ".jpg",
-    ".jpeg"
-  ],
-  "digit_recognition": {
-    "dark_pixel_threshold": 150,
-    "max_digit_score": 0.62,
-    "min_glyph_height": 8,
-    "min_font_size": 16,
-    "max_font_size": 34,
-    "font_paths": []
-  },
-  "layout": {
-    "reference_width": 1513,
-    "reference_height": 628,
-    "nodes": [
-      {
-        "name": "MEI",
-        "label": "MEI",
-        "value_box": [214, 407, 329, 438],
-        "green_max": 2500,
-        "amber_max": 3500
-      },
-      {
-        "name": "FITTING",
-        "label": "Fitting",
-        "value_box": [362, 407, 476, 438],
-        "green_max": 2000,
-        "amber_max": 2500
-      },
-      {
-        "name": "QC",
-        "label": "QC",
-        "value_box": [510, 407, 624, 438],
-        "green_max": 1500,
-        "amber_max": 2000
-      },
-      {
-        "name": "PACKING",
-        "label": "Packing",
-        "value_box": [658, 407, 772, 438],
-        "green_max": 2500,
-        "amber_max": 4000
-      },
-      {
-        "name": "MANIFEST",
-        "label": "Manifest",
-        "value_box": [806, 407, 920, 438],
-        "green_max": 2000,
-        "amber_max": 2500
-      }
-    ]
-  },
-  "slack": {
-    "enabled": false,
-    "all_updates_webhook": "",
-    "breach_updates_webhook": "",
-    "username": "Nexis Monitor",
-    "status_symbols": {
-      "green": "\ud83d\udfe2",
-      "amber": "\ud83d\udfe0",
-      "red": "\ud83d\udd34",
-      "unknown": "\u26aa"
-    }
-  }
+    "data_root":  "data",
+    "output_root":  "collector/output",
+    "image_extensions":  [
+                             ".png",
+                             ".jpg",
+                             ".jpeg"
+                         ],
+    "digit_recognition":  {
+                              "dark_pixel_threshold":  150,
+                              "max_digit_score":  0.62,
+                              "min_glyph_height":  8,
+                              "min_font_size":  16,
+                              "max_font_size":  34,
+                              "font_paths":  [
+
+                                             ]
+                          },
+    "layout":  {
+                   "reference_width":  1621,
+                   "reference_height":  651,
+                   "nodes":  [
+                                 {
+                                     "name":  "MEI",
+                                     "label":  "MEI",
+                                     "value_box":  [
+                                                       68,
+                                                       396,
+                                                       162,
+                                                       427
+                                                   ],
+                                     "green_max":  2500,
+                                     "amber_max":  3500
+                                 },
+                                 {
+                                     "name":  "FITTING",
+                                     "label":  "Fitting",
+                                     "value_box":  [
+                                                       245,
+                                                       396,
+                                                       339,
+                                                       427
+                                                   ],
+                                     "green_max":  2000,
+                                     "amber_max":  2500
+                                 },
+                                 {
+                                     "name":  "QC",
+                                     "label":  "QC",
+                                     "value_box":  [
+                                                       421,
+                                                       396,
+                                                       516,
+                                                       427
+                                                   ],
+                                     "green_max":  1500,
+                                     "amber_max":  2000
+                                 },
+                                 {
+                                     "name":  "PACKING",
+                                     "label":  "Packing",
+                                     "value_box":  [
+                                                       597,
+                                                       396,
+                                                       692,
+                                                       427
+                                                   ],
+                                     "green_max":  2500,
+                                     "amber_max":  4000
+                                 },
+                                 {
+                                     "name":  "MANIFEST",
+                                     "label":  "Manifest",
+                                     "value_box":  [
+                                                       773,
+                                                       396,
+                                                       868,
+                                                       427
+                                                   ],
+                                     "green_max":  2000,
+                                     "amber_max":  2500
+                                 }
+                             ]
+               },
+    "slack":  {
+                  "enabled":  false,
+                  "all_updates_webhook":  "",
+                  "breach_updates_webhook":  "",
+                  "username":  "Nexis Monitor",
+                  "status_symbols":  {
+                                         "green":  "🟢",
+                                         "amber":  "🟠",
+                                         "red":  "🔴",
+                                         "unknown":  "⚪"
+                                     }
+              }
 }
