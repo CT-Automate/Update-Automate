@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import yaml
-from playwright.sync_api import Playwright, sync_playwright
+from playwright.sync_api import Playwright, TimeoutError as PlaywrightTimeoutError, sync_playwright
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -164,6 +164,20 @@ def safe_page_title(page) -> str:
         return "<unknown>"
 
 
+def assert_not_cloudflare_block(page, response_status: int | None) -> None:
+    title = safe_page_title(page)
+    if response_status == 403 and "Cloudflare" in title:
+        raise RuntimeError(
+            "Nexus is blocked by Cloudflare on this runner. "
+            "GitHub-hosted runners usually cannot access protected/internal apps. "
+            "Use a self-hosted GitHub runner on the company network/VPN, or ask IT to allowlist the runner egress/IP/access method."
+        )
+    if "Attention Required" in title and "Cloudflare" in title:
+        raise RuntimeError(
+            "Nexus returned a Cloudflare challenge page instead of the app. "
+            "Automation cannot continue until the runner is trusted by Cloudflare/company access controls."
+        )
+
 def click_required(page, locator, label: str, timeout: int = 15000) -> None:
     try:
         locator.wait_for(state="visible", timeout=timeout)
@@ -194,9 +208,21 @@ def run(playwright: Playwright) -> None:
         page.on("pageerror", lambda exc: print("PAGE ERROR: browser page error occurred"))
         page.set_viewport_size({"width": 1920, "height": 1080})
 
-        response = page.goto(env_or_default("NEXIS_URL", "https://app.nexs.lenskart.com/"), timeout=45000)
-        if response is not None:
-            print(f"Initial page load status: {response.status}; page: {safe_page_location(page)}")
+        response_status = None
+        start_url = env_or_default("NEXIS_URL", "https://app.nexs.lenskart.com/")
+        try:
+            response = page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
+            if response is not None:
+                response_status = response.status
+                print(f"Initial page load status: {response.status}; page: {safe_page_location(page)}")
+            else:
+                print(f"Initial page loaded without response object; page: {safe_page_location(page)}")
+        except PlaywrightTimeoutError:
+            print(
+                "Initial page navigation timed out after 45 seconds. "
+                f"Continuing with current page: {safe_page_location(page)}; title: {safe_page_title(page)}"
+            )
+        assert_not_cloudflare_block(page, response_status)
         try:
             page.wait_for_load_state("networkidle", timeout=15000)
         except Exception:
@@ -279,3 +305,4 @@ def run(playwright: Playwright) -> None:
 if __name__ == "__main__":
     with sync_playwright() as playwright:
         run(playwright)
+
