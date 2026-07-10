@@ -3,7 +3,7 @@ name: Nexs Monitor
 on:
   workflow_dispatch:
   schedule:
-    - cron: '44 * * * *'
+    - cron: '17 * * * *'
 permissions:
   contents: read
 
