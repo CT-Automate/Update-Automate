@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 from playwright.sync_api import Playwright, sync_playwright
@@ -148,6 +149,31 @@ def browser_context_kwargs(settings: dict[str, Any]) -> dict[str, Any]:
     return kwargs
 
 
+def safe_page_location(page) -> str:
+    try:
+        parts = urlsplit(page.url)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    except Exception:
+        return "<unknown>"
+
+
+def safe_page_title(page) -> str:
+    try:
+        return page.title()[:120]
+    except Exception:
+        return "<unknown>"
+
+
+def click_required(page, locator, label: str, timeout: int = 15000) -> None:
+    try:
+        locator.wait_for(state="visible", timeout=timeout)
+        locator.click(timeout=timeout)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not click {label}. Current page: {safe_page_location(page)}; title: {safe_page_title(page)}"
+        ) from exc
+
+
 def run(playwright: Playwright) -> None:
     run_started = time.perf_counter()
     settings = load_settings()
@@ -168,7 +194,9 @@ def run(playwright: Playwright) -> None:
         page.on("pageerror", lambda exc: print("PAGE ERROR: browser page error occurred"))
         page.set_viewport_size({"width": 1920, "height": 1080})
 
-        page.goto(env_or_default("NEXIS_URL", "https://app.nexs.lenskart.com/"))
+        response = page.goto(env_or_default("NEXIS_URL", "https://app.nexs.lenskart.com/"), timeout=45000)
+        if response is not None:
+            print(f"Initial page load status: {response.status}; page: {safe_page_location(page)}")
         try:
             page.wait_for_load_state("networkidle", timeout=15000)
         except Exception:
@@ -176,7 +204,7 @@ def run(playwright: Playwright) -> None:
 
         try:
             employee_code = page.get_by_role("textbox", name="Employee Code")
-            employee_code.wait_for(timeout=5000)
+            employee_code.wait_for(timeout=15000)
             print("Login page detected. Performing login.")
             employee_code.fill(require_env("NEXIS_EMPLOYEE_CODE"))
             page.get_by_role("textbox", name="Password").fill(require_env("NEXIS_PASSWORD"))
@@ -186,22 +214,25 @@ def run(playwright: Playwright) -> None:
             except Exception:
                 pass
         except Exception:
-            print("Login fields were not visible. Continuing with existing session state.")
+            print(
+                "Login fields were not visible. Checking for an existing authenticated session. "
+                f"Current page: {safe_page_location(page)}; title: {safe_page_title(page)}"
+            )
 
         page.evaluate("document.body.style.zoom='80%'")
-        page.get_by_role("button", name="menu").click()
-        page.get_by_role("menuitem", name="Monitor Panel").click()
+        click_required(page, page.get_by_role("button", name="menu"), "menu button")
+        click_required(page, page.get_by_role("menuitem", name="Monitor Panel"), "Monitor Panel menu item")
 
         facility = env_or_default("NEXIS_FACILITY", settings.get("facility", "NXS1"))
-        page.locator("header").get_by_role("button", name="Open").click()
-        page.get_by_role("combobox", name="Select Facility").fill(facility.lower())
-        page.get_by_role("option", name=facility, exact=True).click()
+        click_required(page, page.locator("header").get_by_role("button", name="Open"), "facility selector")
+        page.get_by_role("combobox", name="Select Facility").fill(facility.lower(), timeout=15000)
+        click_required(page, page.get_by_role("option", name=facility, exact=True), f"facility option {facility}")
         wait_for_monitor_ready(page)
 
         captured = step("First", lambda: capture(page, screenshot_path), failures)
 
     except Exception as exc:
-        print(f"ERROR: capture failed: {type(exc).__name__}")
+        print(f"ERROR: capture failed: {type(exc).__name__}: {exc}")
     finally:
         log_timing(
             "nexis_capture",
