@@ -1,34 +1,72 @@
 # NexisMonitor
 
-NexisMonitor captures one temporary Nexus panel screenshot, analyzes it immediately, deletes the screenshot, and can send Slack notifications to two channels. JSON persistence is optional and is disabled in GitHub Actions by default.
+NexisMonitor is set up to run in GitHub Actions on an hourly schedule. It captures one temporary Nexus panel screenshot, analyzes the configured departments, sends Slack notifications, and deletes the screenshot after analysis.
 
-## Structure
+## What the workflow does
 
-- `collector/analyze_panel.py`: screenshot parser, JSON writer, and Slack notifier.
-- `collector/capture_only.py`: screenshot capture script for GitHub Actions or local runs.
-- `collector/requirements.txt`: Python dependencies for capture and analysis.
-- `collector/output/`: optional generated JSON output for local debugging only.
-- Screenshots are stored only in the temp directory during a run and are deleted after analysis.
+Each run performs this sequence:
 
-## Setup
+1. Logs into Nexus using secrets from GitHub Actions.
+2. Opens the Monitor Panel for the configured facility.
+3. Captures one temporary screenshot only.
+4. Extracts the five configured departments: `MEI`, `Fitting`, `QC`, `Packing`, and `Manifest`.
+5. Classifies each value using the threshold rules in `collector/config.example.json`.
+6. Sends Slack updates based on the configured channels and interval.
+7. Deletes the temporary screenshot.
+8. Does not upload artifact output or persist extracted JSON in GitHub Actions by default.
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r collector\requirements.txt
-Copy-Item collector\config.example.json collector\config.local.json
+## Where to change things
+
+### GitHub repository secrets
+Set these in `Settings` > `Secrets and variables` > `Actions`.
+
+Nexus access:
+
+- `NEXIS_EMPLOYEE_CODE`
+- `NEXIS_PASSWORD`
+- `NEXIS_URL`
+- `NEXIS_FACILITY`
+- `NEXIS_USER_DATA_DIR` if you need a custom browser profile path
+- `NEXIS_BROWSER_CHANNEL` if you need a specific browser channel
+
+Slack routing:
+
+- `SLACK_ENABLED`
+- `SLACK_BOT_TOKEN`
+- `SLACK_ALL_UPDATES_CHANNEL`
+- `SLACK_BREACH_UPDATES_CHANNEL`
+- `SLACK_ALL_UPDATES_WEBHOOK`
+- `SLACK_BREACH_UPDATES_WEBHOOK`
+- `SLACK_BREACH_UPDATES_INTERVAL_HOURS`
+
+Recommended Slack setup:
+
+- Use `SLACK_ENABLED=true` to turn notifications on.
+- Use either bot token mode or webhook mode, not both.
+- Set `SLACK_BREACH_UPDATES_INTERVAL_HOURS=10` if you want the breach channel to send on a 10-hour interval while amber/red conditions remain.
+
+### Workflow file
+Edit [.github/workflows/nexis.yml](./.github/workflows/nexis.yml) if you need to change:
+
+- the schedule
+- the browser version
+- the environment variable mapping
+- the capture command
+
+The current schedule is hourly:
+
+```yaml
+schedule:
+  - cron: '0 * * * *'
 ```
 
-The analyzer does not require Tesseract or RapidOCR. It uses the fixed dashboard layout and local Windows font templates to read the large numeric values from each configured card.
+### Analysis rules
+Edit [collector/config.example.json](./collector/config.example.json) if you need to change:
 
-## Configure
-
-Edit `collector/config.local.json`:
-
-- `layout.nodes`: the node cards to read. The default five departments are `MEI`, `Fitting`, `QC`, `Packing`, and `Manifest` from the middle row.
-- `green_max` and `amber_max`: per-node color bands. Green is `value <= green_max`, amber is `green_max < value <= amber_max`, and red/breach is `value > amber_max`.
-- Slack config can come from repository secrets instead of `collector/config.local.json`. Use either `SLACK_BOT_TOKEN` + `SLACK_ALL_UPDATES_CHANNEL` + `SLACK_BREACH_UPDATES_CHANNEL`, or the two webhook secrets `SLACK_ALL_UPDATES_WEBHOOK` and `SLACK_BREACH_UPDATES_WEBHOOK`. Set `SLACK_ENABLED=true` to turn notifications on. Set `SLACK_BREACH_UPDATES_INTERVAL_HOURS=10` to control how often the breach destination is notified while amber/red issues remain.
-- For GitHub Actions capture, set repository secrets `NEXIS_EMPLOYEE_CODE`, `NEXIS_PASSWORD`, `NEXIS_URL`, `NEXIS_FACILITY`, and optionally `NEXIS_USER_DATA_DIR`, `NEXIS_BROWSER_CHANNEL`. The workflow sets `NEXIS_WRITE_JSON=false`, so extracted values are not uploaded or persisted as artifacts.
+- the departments being read
+- the `value_box` coordinates
+- the green and amber thresholds
+- the Slack status symbols
 
 Default department bands:
 
@@ -40,34 +78,17 @@ Default department bands:
 | Packing | `<=2500` | `<=4000` | `>4000` |
 | Manifest | `<=2000` | `<=2500` | `>2500` |
 
-## Run
+## Slack behavior
 
-Scan every discovered screenshot from the NexisMonitor `data` folder. This works from any terminal directory:
+- The all-updates channel receives every processed update on every run.
+- The breach channel receives only amber/red departments.
+- The breach channel sends only on the configured interval, default `SLACK_BREACH_UPDATES_INTERVAL_HOURS=10`.
+- If any configured node cannot be read, the status becomes `READ_ERROR` and the payload records `has_read_error` plus `read_failed_nodes`.
 
-```powershell
-.\.venv\Scripts\python.exe collector\analyze_panel.py
-```
+## Files of interest
 
-Process only the newest discovered screenshot:
-
-```powershell
-.\.venv\Scripts\python.exe collector\analyze_panel.py --latest
-```
-
-Test one screenshot directly without sending Slack:
-
-```powershell
-.\.venv\Scripts\python.exe collector\analyze_panel.py --image C:\path\to\screenshot.png --date 2026-07-09 --time 1806 --no-slack
-```
-
-Local JSON output is optional. Set `NEXIS_WRITE_JSON=true` only when you intentionally want debug output under:
-
-```text
-collector/output/<year>/<yyyy-mm-dd>/<hhmm>.json
-```
-
-Slack behavior:
-
-- The all-updates destination receives every processed update on every run.
-- The breach destination receives a message only when at least one department is amber or red, includes only amber/red departments, and sends only on the configured interval, default `SLACK_BREACH_UPDATES_INTERVAL_HOURS=10`.
-- If any configured node cannot be read, the status is `READ_ERROR`, not `OK`, and the JSON includes `has_read_error` plus `read_failed_nodes`.
+- [collector/capture_only.py](./collector/capture_only.py): captures the temporary screenshot and triggers analysis.
+- [collector/analyze_panel.py](./collector/analyze_panel.py): extracts values, builds payloads, and sends Slack updates.
+- [.github/workflows/nexis.yml](./.github/workflows/nexis.yml): GitHub Actions workflow.
+- [collector/config.example.json](./collector/config.example.json): threshold and layout defaults.
+- [.env.example](./.env.example): example secret names for local reference only.
