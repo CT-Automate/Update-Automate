@@ -1,4 +1,7 @@
-﻿import os
+﻿from __future__ import annotations
+
+import os
+import re
 import subprocess
 import sys
 import time
@@ -23,15 +26,9 @@ except Exception:
 
     wait_for_visible_stable = None
 
-os.environ.pop("PWDEBUG", None)
-
-SCREENSHOT_CLIP = {
-    "x": 0,
-    "y": 63,
-    "width": 2100,
-    "height": 840,
-}
+SCREENSHOT_CLIP = {"x": 0, "y": 63, "width": 2100, "height": 840}
 CLIP_TOP = 63
+os.environ.pop("PWDEBUG", None)
 
 
 def env_or_default(name: str, default: str | None = None) -> str:
@@ -47,80 +44,31 @@ def require_env(name: str, default: str | None = None) -> str:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return value
 
+def load_env_file() -> None:
+    env_path = PROJECT_ROOT / ".env"
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or key in os.environ:
+            continue
+        if (value.startswith("\"") and value.endswith("\"")) or (value.startswith("'") and value.endswith("'")):
+            value = value[1:-1]
+        os.environ[key] = value
 
-def truthy_env(name: str, default: str = "false") -> bool:
-    return env_or_default(name, default).lower() in {"1", "true", "yes", "on"}
 
 
 def disabled_env(name: str, default: str = "false") -> bool:
     return env_or_default(name, default).lower() in {"0", "false", "no", "off"}
 
+def truthy_env(name: str, default: str = "false") -> bool:
+    return env_or_default(name, default).lower() in {"1", "true", "yes", "on"}
 
-def compute_clip(page, top: int = CLIP_TOP, padding: int = 14, min_width: int = 1100) -> dict[str, float]:
-    box = page.evaluate(
-        """() => {
-            const rects = [...document.querySelectorAll('.react-flow__node')]
-                .map(n => n.getBoundingClientRect())
-                .filter(r => r.width > 0 && r.height > 0);
-            if (!rects.length) return null;
-            return {
-                right: Math.max(...rects.map(r => r.right)),
-                bottom: Math.max(...rects.map(r => r.bottom)),
-            };
-        }"""
-    )
-    if not box:
-        return dict(SCREENSHOT_CLIP)
-
-    viewport = page.viewport_size or {"width": 1920, "height": 1080}
-    width = min(viewport["width"], max(box["right"], min_width) + padding)
-    height = min(viewport["height"] - top, box["bottom"] - top + padding)
-    if width <= 0 or height <= 0:
-        return dict(SCREENSHOT_CLIP)
-    return {"x": 0, "y": top, "width": float(width), "height": float(height)}
-
-
-def wait_for_monitor_ready(page, timeout: int = 20000) -> None:
-    try:
-        if wait_for_visible_stable is None:
-            page.locator(".react-flow__node").first.wait_for(state="visible", timeout=timeout)
-            return
-        wait_for_visible_stable(
-            page,
-            [".react-flow__node"],
-            timeout=timeout,
-            stable_ms=850,
-            label="nexis_monitor",
-        )
-    except Exception as exc:
-        print(f"WARNING: monitor DOM did not settle before capture: {type(exc).__name__}")
-
-
-def capture(page, filepath: Path) -> None:
-    wait_for_monitor_ready(page)
-    clip = compute_clip(page)
-    page.screenshot(path=str(filepath), clip=clip)
-    print(f"Captured temporary screenshot ({int(clip['width'])}x{int(clip['height'])}).")
-
-
-def step(name: str, fn, failures: list[tuple[str, str]]) -> bool:
-    started = time.perf_counter()
-    status = "ok"
-    for attempt in range(1, 4):
-        try:
-            fn()
-            print(f"[OK] {name}")
-            break
-        except Exception as exc:
-            print(f"[FAIL] {name} attempt {attempt}: {type(exc).__name__}")
-            if attempt == 3:
-                status = "failed"
-                failures.append((name, type(exc).__name__))
-                break
-            time.sleep(1)
-
-    log_timing("nexis_capture", f"shot:{name}", time.perf_counter() - started, status=status)
-    return status == "ok"
 
 
 def load_settings() -> dict[str, Any]:
@@ -164,48 +112,121 @@ def safe_page_title(page) -> str:
         return "<unknown>"
 
 
+def dump_page_snapshot(page, label: str) -> None:
+    try:
+        print(f"[{label}] url: {safe_page_location(page)}")
+        print(f"[{label}] title: {safe_page_title(page)}")
+        buttons = page.locator("button")
+        button_count = min(buttons.count(), 20)
+        if button_count:
+            print(f"[{label}] buttons:")
+            for index in range(button_count):
+                try:
+                    text = buttons.nth(index).inner_text(timeout=2000).strip()
+                except Exception:
+                    text = "<unreadable>"
+                print(f"  button[{index}]: {text[:120]}")
+        links = page.locator("a")
+        link_count = min(links.count(), 20)
+        if link_count:
+            print(f"[{label}] links:")
+            for index in range(link_count):
+                try:
+                    text = links.nth(index).inner_text(timeout=2000).strip()
+                except Exception:
+                    text = "<unreadable>"
+                print(f"  link[{index}]: {text[:120]}")
+    except Exception as exc:
+        print(f"[{label}] snapshot failed: {type(exc).__name__}: {exc}")
+
+
 def assert_not_cloudflare_block(page, response_status: int | None) -> None:
     title = safe_page_title(page)
     if response_status == 403 and "Cloudflare" in title:
-        raise RuntimeError(
-            "Nexus is blocked by Cloudflare on this runner. "
-            "GitHub-hosted runners usually cannot access protected/internal apps. "
-            "Use a self-hosted GitHub runner on the company network/VPN, or ask IT to allowlist the runner egress/IP/access method."
-        )
+        raise RuntimeError("Nexus is blocked by Cloudflare on this runner.")
     if "Attention Required" in title and "Cloudflare" in title:
-        raise RuntimeError(
-            "Nexus returned a Cloudflare challenge page instead of the app. "
-            "Automation cannot continue until the runner is trusted by Cloudflare/company access controls."
-        )
+        raise RuntimeError("Nexus returned a Cloudflare challenge page instead of the app.")
+
 
 def click_required(page, locator, label: str, timeout: int = 15000) -> None:
     try:
         locator.wait_for(state="visible", timeout=timeout)
         locator.click(timeout=timeout)
     except Exception as exc:
+        dump_page_snapshot(page, f"click_failed:{label}")
         raise RuntimeError(
-            f"Could not click {label}. Current page: {safe_page_location(page)}; title: {safe_page_title(page)}"
+            f"Could not click {label}. Current page: {safe_page_location(page)}; title: {safe_page_title(page)}; underlying: {type(exc).__name__}: {exc}"
         ) from exc
+
+
+def compute_clip(page, top: int = CLIP_TOP, padding: int = 14, min_width: int = 1100) -> dict[str, float]:
+    box = page.evaluate(
+        """() => {
+            const rects = [...document.querySelectorAll('.react-flow__node')]
+                .map(n => n.getBoundingClientRect())
+                .filter(r => r.width > 0 && r.height > 0);
+            if (!rects.length) return null;
+            return {
+                right: Math.max(...rects.map(r => r.right)),
+                bottom: Math.max(...rects.map(r => r.bottom)),
+            };
+        }"""
+    )
+    if not box:
+        return dict(SCREENSHOT_CLIP)
+
+    viewport = page.viewport_size or {"width": 1920, "height": 1080}
+    width = min(viewport["width"], max(box["right"], min_width) + padding)
+    height = min(viewport["height"] - top, box["bottom"] - top + padding)
+    if width <= 0 or height <= 0:
+        return dict(SCREENSHOT_CLIP)
+    return {"x": 0, "y": top, "width": float(width), "height": float(height)}
+
+
+def wait_for_monitor_ready(page, timeout: int = 20000) -> None:
+    try:
+        if wait_for_visible_stable is None:
+            page.locator(".react-flow__node").first.wait_for(state="visible", timeout=timeout)
+            return
+        wait_for_visible_stable(page, [".react-flow__node"], timeout=timeout, stable_ms=850, label="nexis_monitor")
+    except Exception as exc:
+        print(f"WARNING: monitor DOM did not settle before capture: {type(exc).__name__}")
+
+
+def capture(page, filepath: Path) -> None:
+    wait_for_monitor_ready(page)
+    clip = compute_clip(page)
+    page.screenshot(path=str(filepath), clip=clip)
+    print(f"Captured temporary screenshot ({int(clip['width'])}x{int(clip['height'])}).")
+
+
+def open_monitor_panel(page) -> None:
+    click_required(page, page.get_by_role("button", name="menu"), "menu button")
+    click_required(page, page.get_by_role("menuitem", name="Monitor Panel"), "Monitor Panel menu item")
+
+
+def select_facility(page, facility: str) -> None:
+    click_required(page, page.locator("div").filter(has_text=re.compile(r"^Select Facility$")), "Select Facility dropdown")
+    page.get_by_role("combobox", name="Select Facility").fill(facility, timeout=15000)
+    click_required(page, page.get_by_role("option", name=facility, exact=True), f"facility option {facility}")
 
 
 def run(playwright: Playwright) -> None:
     run_started = time.perf_counter()
     settings = load_settings()
+    load_env_file()
     now = datetime.now()
-    temp_root = Path(env_or_default("NEXIS_TEMP_ROOT", os.getenv("RUNNER_TEMP") or os.getenv("TEMP") or "/tmp"))
-    temp_root.mkdir(parents=True, exist_ok=True)
-    screenshot_path = temp_root / f"nexis_{now.strftime('%Y%m%d_%H%M%S')}_first.png"
-    failures: list[tuple[str, str]] = []
-    captured = False
+    screenshot_dir = Path(env_or_default("NEXIS_SCREENSHOT_DIR", str(PROJECT_ROOT / "data" / "latest")))
+    screenshot_dir.mkdir(parents=True, exist_ok=True)
+    screenshot_path = screenshot_dir / "first.png"
     context = None
     page = None
 
-    print("Starting ephemeral Nexus capture. The screenshot will be deleted after analysis.")
+    print(f"Starting Nexus capture. Screenshot will be saved permanently at: {screenshot_path}")
 
     try:
         context = playwright.chromium.launch_persistent_context(**browser_context_kwargs(settings))
         page = context.new_page()
-        page.on("pageerror", lambda exc: print("PAGE ERROR: browser page error occurred"))
         page.set_viewport_size({"width": 1920, "height": 1080})
 
         response_status = None
@@ -215,67 +236,63 @@ def run(playwright: Playwright) -> None:
             if response is not None:
                 response_status = response.status
                 print(f"Initial page load status: {response.status}; page: {safe_page_location(page)}")
-            else:
-                print(f"Initial page loaded without response object; page: {safe_page_location(page)}")
         except PlaywrightTimeoutError:
-            print(
-                "Initial page navigation timed out after 45 seconds. "
-                f"Continuing with current page: {safe_page_location(page)}; title: {safe_page_title(page)}"
-            )
+            print(f"Initial page navigation timed out. Page: {safe_page_location(page)}; title: {safe_page_title(page)}")
         assert_not_cloudflare_block(page, response_status)
+
         try:
             page.wait_for_load_state("networkidle", timeout=15000)
         except Exception:
             pass
 
-        try:
-            employee_code = page.get_by_role("textbox", name="Employee Code")
-            employee_code.wait_for(timeout=15000)
+        current_path = safe_page_location(page)
+        employee_code = page.get_by_role("textbox", name="Employee Code")
+        login_visible = employee_code.count() > 0 and employee_code.first.is_visible()
+        on_dashboard = current_path.endswith("/dashboard")
+
+        if login_visible:
             print("Login page detected. Performing login.")
-            employee_code.fill(require_env("NEXIS_EMPLOYEE_CODE"))
-            page.get_by_role("textbox", name="Password").fill(require_env("NEXIS_PASSWORD"))
+            employee_value = require_env("NEXIS_EMPLOYEE_CODE")
+            password_value = require_env("NEXIS_PASSWORD")
+            print(f"Filling login fields: employee_code_len={len(employee_value)}, password_len={len(password_value)}")
+            employee_code.fill(employee_value)
+            page.get_by_role("textbox", name="Password").fill(password_value)
+            print("Login fields filled. Clicking LOGIN.")
             page.get_by_role("button", name="LOGIN").click()
             try:
                 page.wait_for_load_state("networkidle", timeout=15000)
             except Exception:
                 pass
-        except Exception:
-            print(
-                "Login fields were not visible. Checking for an existing authenticated session. "
-                f"Current page: {safe_page_location(page)}; title: {safe_page_title(page)}"
-            )
+        elif on_dashboard:
+            print(f"Already authenticated on dashboard: {current_path}; skipping login.")
+        else:
+            dump_page_snapshot(page, "login_not_visible")
+            raise RuntimeError(f"Login form is not visible. Current page: {safe_page_location(page)}; title: {safe_page_title(page)}")
 
         page.evaluate("document.body.style.zoom='80%'")
-        click_required(page, page.get_by_role("button", name="menu"), "menu button")
-        click_required(page, page.get_by_role("menuitem", name="Monitor Panel"), "Monitor Panel menu item")
-
+        open_monitor_panel(page)
         facility = env_or_default("NEXIS_FACILITY", settings.get("facility", "NXS1"))
-        click_required(page, page.locator("header").get_by_role("button", name="Open"), "facility selector")
-        page.get_by_role("combobox", name="Select Facility").fill(facility.lower(), timeout=15000)
-        click_required(page, page.get_by_role("option", name=facility, exact=True), f"facility option {facility}")
+        select_facility(page, facility)
         wait_for_monitor_ready(page)
-
-        captured = step("First", lambda: capture(page, screenshot_path), failures)
+        capture(page, screenshot_path)
 
     except Exception as exc:
+        dump_page_snapshot(page, "run_failed")
         print(f"ERROR: capture failed: {type(exc).__name__}: {exc}")
+        raise
     finally:
         log_timing(
             "nexis_capture",
             "run_total",
             time.perf_counter() - run_started,
-            status="ok" if captured else "no_screenshots",
-            details={"captured": int(captured), "failures": len(failures)},
+            status="ok" if screenshot_path.exists() else "no_screenshots",
+            details={"captured": int(screenshot_path.exists())},
         )
         if context is not None:
             try:
                 context.close()
             except Exception:
                 pass
-
-    if not screenshot_path.exists():
-        print("No Nexus screenshot captured this run.", file=sys.stderr)
-        sys.exit(1)
 
     analyze_cmd = [
         sys.executable,
@@ -289,20 +306,15 @@ def run(playwright: Playwright) -> None:
     ]
     if disabled_env("SLACK_ENABLED", "true"):
         analyze_cmd.append("--no-slack")
-    if disabled_env("NEXIS_WRITE_JSON", "true"):
-        analyze_cmd.append("--no-json")
 
     try:
         subprocess.run(analyze_cmd, check=True)
     finally:
-        try:
-            screenshot_path.unlink(missing_ok=True)
-            print("Deleted temporary screenshot.")
-        except Exception as exc:
-            print(f"WARNING: could not delete temporary screenshot: {type(exc).__name__}")
-
+        print(f"Screenshot kept permanently: {screenshot_path}")
 
 if __name__ == "__main__":
     with sync_playwright() as playwright:
         run(playwright)
+
+
 

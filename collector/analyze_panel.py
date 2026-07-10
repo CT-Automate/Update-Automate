@@ -244,8 +244,15 @@ def scale_box(
         int(round(y2 * scale_y)),
     )
 
+def save_debug_crop(crop_dir: Path, node_name: str, image: Image.Image, box: tuple[int, int, int, int]) -> Path:
+    crop_dir.mkdir(parents=True, exist_ok=True)
+    crop_path = crop_dir / f"{node_name}.png"
+    image.crop(box).save(crop_path)
+    return crop_path
 
-def extract_nodes(image_path: Path, config: dict[str, Any], recognizer: DigitRecognizer) -> list[dict[str, Any]]:
+
+
+def extract_nodes(image_path: Path, config: dict[str, Any], recognizer: DigitRecognizer, debug_crop_dir: Path | None = None) -> list[dict[str, Any]]:
     layout = config["layout"]
     ref_width = int(layout["reference_width"])
     ref_height = int(layout["reference_height"])
@@ -263,6 +270,9 @@ def extract_nodes(image_path: Path, config: dict[str, Any], recognizer: DigitRec
                 amber_max=read_node_limit(raw_node, "amber_max"),
             )
             box = scale_box(node.value_box, image.width, image.height, ref_width, ref_height)
+            if debug_crop_dir is not None:
+                crop_path = save_debug_crop(debug_crop_dir, node.name, image, box)
+                safe_print(f"Debug crop saved: {crop_path}")
             reading = recognizer.read_number(image.crop(box))
             status = classify_value(reading.value, node.green_max, node.amber_max)
             nodes.append(
@@ -381,16 +391,10 @@ def format_node_caption(node: dict[str, Any]) -> str:
 def format_slack_message(payload: dict[str, Any], *, breach_only: bool = False) -> str:
     if breach_only:
         nodes = [node for node in payload["nodes"] if node["status"] in {"amber", "red"}]
-        header = f"[BREACH] {payload['date']} {payload['time']}"
-    elif payload.get("has_read_error"):
-        nodes = payload["nodes"]
-        header = f"[READ_ERROR] {payload['date']} {payload['time']}"
     else:
         nodes = payload["nodes"]
-        header = f"{payload['date']} {payload['time']}"
 
-    lines = [format_node_caption(node) for node in nodes]
-    return "\n".join([header, *lines])
+    return "\n".join(format_node_caption(node) for node in nodes)
 
 
 def post_to_slack(webhook_url: str, message: str, username: str) -> None:
@@ -417,6 +421,50 @@ def post_to_slack_channel(bot_token: str, channel: str, message: str, username: 
     payload = response.json()
     if not payload.get("ok"):
         raise RuntimeError(payload.get("error", "Slack API request failed"))
+
+
+def upload_screenshot_to_slack_channel(bot_token: str, channel: str, image_path: str, message: str, username: str) -> None:
+    import requests
+
+    path = Path(image_path)
+    if not path.exists():
+        post_to_slack_channel(bot_token, channel, message, username)
+        return
+
+    headers = {"Authorization": f"Bearer {bot_token}"}
+    upload_info = requests.post(
+        "https://slack.com/api/files.getUploadURLExternal",
+        headers=headers,
+        data={"filename": path.name, "length": str(path.stat().st_size)},
+        timeout=15,
+    )
+    upload_info.raise_for_status()
+    upload_payload = upload_info.json()
+    if not upload_payload.get("ok"):
+        raise RuntimeError(upload_payload.get("error", "Slack upload URL request failed"))
+
+    with path.open("rb") as handle:
+        upload_response = requests.post(
+            upload_payload["upload_url"],
+            files={"file": (path.name, handle, "image/png")},
+            timeout=30,
+        )
+    upload_response.raise_for_status()
+
+    complete_response = requests.post(
+        "https://slack.com/api/files.completeUploadExternal",
+        headers=headers,
+        json={
+            "files": [{"id": upload_payload["file_id"], "title": path.name}],
+            "channel_id": channel,
+            "initial_comment": message,
+        },
+        timeout=15,
+    )
+    complete_response.raise_for_status()
+    complete_payload = complete_response.json()
+    if not complete_payload.get("ok"):
+        raise RuntimeError(complete_payload.get("error", "Slack upload completion failed"))
 
 
 def has_attention_nodes(payload: dict[str, Any]) -> bool:
@@ -457,16 +505,19 @@ def maybe_send_slack(config: dict[str, Any], payload: dict[str, Any], enabled: b
     all_updates_channel = os.getenv("SLACK_ALL_UPDATES_CHANNEL", slack.get("all_updates_channel", "")).strip()
     breach_updates_channel = os.getenv("SLACK_BREACH_UPDATES_CHANNEL", slack.get("breach_updates_channel", "")).strip()
 
+    image_path = payload.get("image_path", "")
+    all_message = format_slack_message(payload)
     if bot_token and all_updates_channel:
-        post_to_slack_channel(bot_token, all_updates_channel, format_slack_message(payload), username)
+        upload_screenshot_to_slack_channel(bot_token, all_updates_channel, image_path, all_message, username)
     elif all_updates:
-        post_to_slack(all_updates, format_slack_message(payload), username)
+        post_to_slack(all_updates, all_message, username)
 
     if should_send_breach_update(payload):
+        breach_message = format_slack_message(payload, breach_only=True)
         if bot_token and breach_updates_channel:
-            post_to_slack_channel(bot_token, breach_updates_channel, format_slack_message(payload, breach_only=True), username)
+            upload_screenshot_to_slack_channel(bot_token, breach_updates_channel, image_path, breach_message, username)
         elif breach_updates:
-            post_to_slack(breach_updates, format_slack_message(payload, breach_only=True), username)
+            post_to_slack(breach_updates, breach_message, username)
 
 
 def parse_args() -> argparse.Namespace:
@@ -482,6 +533,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--latest", action="store_true", help="Only process the latest discovered screenshot.")
     parser.add_argument("--no-slack", action="store_true", help="Do not send Slack notifications.")
     parser.add_argument("--no-json", action="store_true", help="Do not persist extracted values to JSON.")
+    parser.add_argument("--debug-crops", action="store_true", help="Save each department crop as a PNG next to the analyzed image.")
     return parser.parse_args()
 
 
@@ -514,9 +566,13 @@ def main() -> None:
         safe_print("No screenshots found.")
         return
 
+    debug_crop_dir = None
+    if args.debug_crops and args.image:
+        debug_crop_dir = Path(args.image).with_suffix("").parent / f"{Path(args.image).stem}_debug_crops"
+        debug_crop_dir.mkdir(parents=True, exist_ok=True)
     output_root = resolve_workspace_path(config["output_root"])
     for entry in entries:
-        nodes = extract_nodes(Path(entry["image_path"]), config, recognizer)
+        nodes = extract_nodes(Path(entry["image_path"]), config, recognizer, debug_crop_dir=debug_crop_dir)
         payload = build_payload(entry, nodes)
         maybe_send_slack(config, payload, enabled=not args.no_slack)
         if should_write_json() and not args.no_json:
