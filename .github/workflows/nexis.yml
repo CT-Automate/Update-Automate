@@ -1,4 +1,4 @@
-name: Nexis Monitor
+name: Nexs Monitor
 
 on:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.14.06'
 
       - name: Install dependencies
         run: |
