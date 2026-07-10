@@ -14,8 +14,9 @@ concurrency:
 
 jobs:
   capture-and-analyze:
-    runs-on: -self-hosted
-             - windows
+    runs-on:
+      - self-hosted
+      - Windows
     timeout-minutes: 60
 
     env:
