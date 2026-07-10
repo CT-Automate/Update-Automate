@@ -1,12 +1,12 @@
-# NexisMonitor
+# Update-Automate
 
-NexisMonitor is set up to run in GitHub Actions on an hourly schedule. It captures one temporary Nexus panel screenshot, analyzes the configured departments, sends Slack notifications, and deletes the screenshot after analysis.
+Update-Automate is set up to run in GitHub Actions on an hourly schedule. It captures one temporary Nexus panel screenshot, analyzes the configured departments, sends Slack notifications, and deletes the screenshot after analysis.
 
 ## What the workflow does
 
 Each run performs this sequence:
 
-1. Logs into Nexus using secrets from GitHub Actions.
+1. Logs into Nexs using secrets from GitHub Actions.
 2. Opens the Monitor Panel for the configured facility.
 3. Captures one temporary screenshot only.
 4. Extracts the five configured departments: `MEI`, `Fitting`, `QC`, `Packing`, and `Manifest`.
@@ -91,4 +91,4 @@ Default department bands:
 - [collector/analyze_panel.py](./collector/analyze_panel.py): extracts values, builds payloads, and sends Slack updates.
 - [.github/workflows/nexis.yml](./.github/workflows/nexis.yml): GitHub Actions workflow.
 - [collector/config.example.json](./collector/config.example.json): threshold and layout defaults.
-- [.env.example](./.env.example): example secret names for local reference only.
+
