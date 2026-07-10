@@ -6,7 +6,6 @@ NexisMonitor captures one temporary Nexus panel screenshot, analyzes it immediat
 
 - `collector/analyze_panel.py`: screenshot parser, JSON writer, and Slack notifier.
 - `collector/capture_only.py`: screenshot capture script for GitHub Actions or local runs.
-- `collector/config.local.json`: local runtime config; ignored by git if this becomes a repository.
 - `collector/requirements.txt`: Python dependencies for capture and analysis.
 - `collector/output/`: optional generated JSON output for local debugging only.
 - Screenshots are stored only in the temp directory during a run and are deleted after analysis.
