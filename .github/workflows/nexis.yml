@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: nexis-monitor
+  group: nexs-monitor
   cancel-in-progress: false
 
 jobs:
