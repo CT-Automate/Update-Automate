@@ -3,8 +3,8 @@ name: Nexs Monitor
 on:
   workflow_dispatch:
   schedule:
-    - cron: '52 * * * *'
-      timezone: 'Asia/Kolkata'
+    - cron: '30 * * * *'
+      
       
 permissions:
   contents: read
